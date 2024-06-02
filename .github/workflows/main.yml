@@ -1,0 +1,98 @@
+name: Run Python Scripts in Sequence
+
+on:
+  schedule:
+      - cron: '0 */12 * * *'  # Runs every 90 minutes
+
+  push:
+    branches:
+      - main
+
+jobs:
+  load-and-insert-mongo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo bson
+
+      - name: Run load_json.py
+        env:
+          load_mongo_url: ${{ secrets.LOAD_MONGO_URL }}
+          target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
+        run: python load_json.py
+
+  load-json-file:
+    needs: load-and-insert-mongo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo bson
+
+      - name: Run load_json_file.py
+        env:
+          target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
+        run: python load_json_file.py
+ 
+  load-excel-file:
+    needs: load-json-file
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo pandas xlsxwriter
+
+      - name: Run load_excel_file.py
+        env:
+          target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
+        run: python load_excel_file.py
+
+  load-img-file:
+    needs: load-excel-file
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo pandas matplotlib
+
+      - name: Run load_img_files.py
+        env:
+          target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
+        run: python load_img_files.py
