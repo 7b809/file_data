@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - main
-
 jobs:
   load-and-insert-mongo:
     runs-on: ubuntu-latest
@@ -16,9 +15,9 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v3
         with:
-          python-version: '3.9'
+          python-version: '3.x' # Update to the latest version available
 
       - name: Install dependencies
         run: |
@@ -30,6 +29,7 @@ jobs:
           load_mongo_url: ${{ secrets.LOAD_MONGO_URL }}
           target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
         run: python load_json.py
+
 
   load-json-file:
     needs: load-and-insert-mongo
