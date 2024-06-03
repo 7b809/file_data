@@ -36,7 +36,7 @@ if os.path.exists('json_files'):
 os.makedirs('json_files')
 
 # Fetch all collections and save each as a JSON file
-collection_names = db.list_collection_names()[:5]
+collection_names = db.list_collection_names()
 total_collections = len(collection_names)
 for index, collection_name in enumerate(collection_names, start=1):
     collection = db[collection_name]
