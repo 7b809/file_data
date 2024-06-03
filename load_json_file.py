@@ -2,9 +2,9 @@ import pymongo
 import json
 import os
 import re
-import shutil  # For removing directories and their contents
-from bson import ObjectId
-import zipfile  # For creating zip files
+import shutil
+import zipfile
+from gridfs import GridFS
 
 # Replace these values with your target MongoDB connection details
 target_mongo_url = os.getenv("target_mongo_url")
@@ -28,11 +28,9 @@ def sanitize_collection_name(collection_name):
 # Ensure the json_files directory exists
 if os.path.exists('json_files'):
     print("Directory 'json_files' exists. Deleting it completely.")
-    # Remove the directory and all its contents
     shutil.rmtree('json_files')
     print("Directory 'json_files' and its contents have been deleted.")
 
-# Create the json_files directory
 os.makedirs('json_files')
 
 # Fetch all collections and save each as a JSON file
@@ -43,13 +41,9 @@ for index, collection_name in enumerate(collection_names, start=1):
     documents = collection.find()
     documents_list = [convert_object_ids(doc) for doc in documents]
 
-    # Sanitize collection name for file naming
     sanitized_collection_name = sanitize_collection_name(collection_name)
-
-    # Define the output file path
     file_path = os.path.join('json_files', f'{sanitized_collection_name}.json')
     
-    # Save the documents to the JSON file
     with open(file_path, 'w') as json_file:
         json.dump(documents_list, json_file, indent=4)
     
@@ -66,27 +60,21 @@ with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
 
 print(f"Directory 'json_files' has been zipped into '{zip_file_path}'.")
 
-# Connect to the target MongoDB database for storing the zip file
+# Connect to the target MongoDB database for storing the zip file using GridFS
 zip_db = client['zip_files']
-zip_collection = zip_db['json_files']
+fs = GridFS(zip_db)
 
 # Check if the collection is not empty and delete its contents if it is not empty
-if zip_collection.count_documents({}) > 0:
-    print("Collection 'json_files' is not empty. Deleting all documents.")
-    zip_collection.delete_many({})
-    print("All documents in 'json_files' collection have been deleted.")
+if fs.find().count() > 0:
+    print("GridFS collection is not empty. Deleting all files.")
+    fs.delete_many({})
+    print("All files in the GridFS collection have been deleted.")
 
-# Read the zip file and insert it into MongoDB
+# Store the zip file in GridFS
 with open(zip_file_path, 'rb') as file_data:
-    zip_binary = file_data.read()
-    zip_document = {
-        "filename": "json_files.zip",
-        "filedata": zip_binary
-    }
-    zip_collection.insert_one(zip_document)
+    grid_in = fs.put(file_data, filename='json_files.zip')
 
-print("Zip file has been saved to MongoDB successfully.")
-
+print("Zip file has been saved to MongoDB using GridFS successfully.")
 
 # Close the MongoDB connection
 client.close()
