@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import zipfile
+from bson import ObjectId  # Import ObjectId
 from gridfs import GridFS
 
 # Replace these values with your target MongoDB connection details
@@ -67,7 +68,10 @@ fs = GridFS(zip_db)
 # Check if the collection is not empty and delete its contents if it is not empty
 if fs.find().count() > 0:
     print("GridFS collection is not empty. Deleting all files.")
-    fs.delete_many({})
+    fs_files = zip_db['fs.files']
+    fs_chunks = zip_db['fs.chunks']
+    fs_files.delete_many({})
+    fs_chunks.delete_many({})
     print("All files in the GridFS collection have been deleted.")
 
 # Store the zip file in GridFS
