@@ -92,7 +92,7 @@ jobs:
   #         python -m pip install --upgrade pip
   #         pip install pymongo pandas matplotlib xlsxwriter
 
-      - name: Run load_img_files.py
-        env:
-          target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
-        run: python load_img_files.py
+  #     - name: Run load_img_files.py
+  #       env:
+  #         target_mongo_url: ${{ secrets.TARGET_MONGO_URL }}
+  #       run: python load_img_files.py
