@@ -1,4 +1,3 @@
-import pandas as pd
 import pymongo
 from bson import ObjectId
 from datetime import datetime
@@ -6,7 +5,9 @@ import os
 import re
 import shutil
 import zipfile
+import pandas as pd
 from gridfs import GridFS
+import io
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -21,6 +22,26 @@ def parse_timestamp(timestamp):
 # Function to sanitize file names by replacing special characters with underscores
 def sanitize_file_name(name):
     return re.sub(r'\W+', '_', name)
+
+# Function to split DataFrame into chunks based on size limit
+def split_documents(df, max_size=15000000):
+    chunks = []
+    current_size = 0
+    current_chunk = pd.DataFrame()
+
+    for index, row in df.iterrows():
+        row_size = row.memory_usage(deep=True).sum()
+        if current_size + row_size > max_size:
+            chunks.append(current_chunk)
+            current_chunk = pd.DataFrame()
+            current_size = 0
+        current_chunk = current_chunk.append(row, ignore_index=True)
+        current_size += row_size
+
+    if not current_chunk.empty:
+        chunks.append(current_chunk)
+
+    return chunks
 
 # Replace these values with your target MongoDB connection details
 target_mongo_url = os.getenv("target_mongo_url")
@@ -75,56 +96,61 @@ for idx, collection_name in enumerate(collection_names):
     df = df.fillna('NA').astype(object)
     df.replace([float('inf'), float('-inf')], 'NA', inplace=True)
 
-    # Sanitize collection name to use it as a file name
-    sanitized_collection_name = sanitize_file_name(collection_name)
-    excel_file_path = os.path.join('excel_files', f"{sanitized_collection_name}.xlsx")
+    # Split DataFrame into chunks based on document size limit (approx. 15MB)
+    df_chunks = split_documents(df)
 
-    try:
-        # Save DataFrame to Excel with auto-width columns and add blue color design
-        with pd.ExcelWriter(excel_file_path, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Sheet1', startrow=1, header=False)
+    # Save each chunk as a separate Excel file
+    for i, chunk in enumerate(df_chunks):
+        # Sanitize collection name to use it as a file name
+        sanitized_collection_name = sanitize_file_name(f"{collection_name}_{i}")
+        excel_file_path = os.path.join('excel_files', f"{sanitized_collection_name}.xlsx")
 
-            workbook  = writer.book
-            worksheet = writer.sheets['Sheet1']
+        try:
+            # Save DataFrame chunk to Excel with auto-width columns and add blue color design
+            with pd.ExcelWriter(excel_file_path, engine='xlsxwriter') as writer:
+                chunk.to_excel(writer, index=False, sheet_name='Sheet1', startrow=1, header=False)
 
-            # Add a header format with border and centered text
-            header_format = workbook.add_format({
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'top',
-                'align': 'center',
-                'font_size': 11,
-                'fg_color': '#3EC6EC',  # Blue color
-                'border': 1
-            })
+                workbook = writer.book
+                worksheet = writer.sheets['Sheet1']
 
-            # Write the column headers with the defined format
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                # Set column width for headers
-                column_width = max(len(value), 10) + 2  # Adjust 10 to a suitable default width
-                worksheet.set_column(col_num, col_num, column_width)
+                # Add a header format with border and centered text
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'text_wrap': True,
+                    'valign': 'top',
+                    'align': 'center',
+                    'font_size': 11,
+                    'fg_color': '#3EC6EC',  # Blue color
+                    'border': 1
+                })
 
-            # Set column width and apply blue color to all data cells with border and centered text
-            for i, col in enumerate(df.columns):
-                column_width = max(df[col].astype(str).map(len).max(), len(col))
-                worksheet.set_column(i, i, column_width)
-                for j in range(len(df[col])):
-                    cell_format = workbook.add_format({
-                        'fg_color': '#DDEBF7',  # Light blue color
-                        'border': 1,
-                        'align': 'center',
-                        'font_size': 9,
-                        'valign': 'vcenter'
-                    })
-                    worksheet.write(j + 1, i, df[col][j], cell_format)
+                # Write the column headers with the defined format
+                for col_num, value in enumerate(chunk.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+                    # Set column width for headers
+                    column_width = max(len(value), 10) + 2  # Adjust 10 to a suitable default width
+                    worksheet.set_column(col_num, col_num, column_width)
 
-            # Add filter to every column
-            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+                # Set column width and apply blue color to all data cells with border and centered text
+                for j, col in enumerate(chunk.columns):
+                    column_width = max(chunk[col].astype(str).map(len).max(), len(col))
+                    worksheet.set_column(j, j, column_width)
+                    for k in range(len(chunk[col])):
+                        cell_format = workbook.add_format({
+                            'fg_color': '#DDEBF7',  # Light blue color
+                            'border': 1,
+                            'align': 'center',
+                            'font_size': 9,
+                            'valign': 'vcenter'
+                        })
+                        worksheet.write(k + 1, j, chunk[col].iloc[k], cell_format)
 
-        print(f"File {idx + 1} out of {total_files} saved: {excel_file_path}")
-    except Exception as e:
-        print(f"Failed to save file {sanitized_collection_name}.xlsx due to {e}")
+                # Add filter to every column
+                worksheet.autofilter(0, 0, len(chunk), len(chunk.columns) - 1)
+
+            print(f"File {i + 1} of {len(df_chunks)} for {collection_name} saved: {excel_file_path}")
+        except Exception as e:
+            print(f"Failed to save file {sanitized_collection_name}.xlsx due to {e}")
 
 # Create a zip file of the excel_files directory
 zip_file_path = 'excel_files.zip'
@@ -134,8 +160,6 @@ with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), 'excel_files'))
 
 print(f"Excel files have been zipped into {zip_file_path}")
-
-
 
 # Connect to the target MongoDB database for storing the zip file
 zip_db = client['zip_files']
@@ -147,14 +171,10 @@ if zip_collection.count_documents({}) > 0:
     zip_collection.delete_many({})
     print("All documents in 'excel_files' collection have been deleted.")
 
-# Read the zip file and insert it into MongoDB
+# Read the zip file and insert it into MongoDB using GridFS
+fs = GridFS(zip_db)
 with open(zip_file_path, 'rb') as file_data:
-    zip_binary = file_data.read()
-    zip_document = {
-        "filename": "excel_files.zip",
-        "filedata": zip_binary
-    }
-    zip_collection.insert_one(zip_document)
+    file_id = fs.put(file_data, filename="excel_files.zip")
 
 print("Zip file has been saved to MongoDB successfully.")
 
