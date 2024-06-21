@@ -43,6 +43,7 @@ def split_documents(df, max_size=15000000):
 
     return chunks
 
+
 # Replace these values with your target MongoDB connection details
 target_mongo_url = os.getenv("target_mongo_url")
 target_db_name = "channel_related_json"
