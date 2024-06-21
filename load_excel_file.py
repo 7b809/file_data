@@ -44,7 +44,7 @@ def split_documents(df, max_size=15000000):
     return chunks
 
 # Replace these values with your target MongoDB connection details
-target_mongo_url = "mongodb+srv://your_username:your_password@your_cluster_url/your_database?retryWrites=true&w=majority"
+target_mongo_url = os.getenv("target_mongo_url")
 target_db_name = "channel_related_json"
 
 # Connect to MongoDB
