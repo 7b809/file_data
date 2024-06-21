@@ -43,9 +43,8 @@ def split_documents(df, max_size=15000000):
 
     return chunks
 
-
 # Replace these values with your target MongoDB connection details
-target_mongo_url = os.getenv("target_mongo_url")
+target_mongo_url = "mongodb+srv://your_username:your_password@your_cluster_url/your_database?retryWrites=true&w=majority"
 target_db_name = "channel_related_json"
 
 # Connect to MongoDB
@@ -68,6 +67,7 @@ collection_names = db.list_collection_names()
 total_files = len(collection_names)
 
 # Iterate over each collection and save its data to an Excel file
+total_excel_files = 0
 for idx, collection_name in enumerate(collection_names):
     collection = db[collection_name]
 
@@ -150,6 +150,7 @@ for idx, collection_name in enumerate(collection_names):
                 worksheet.autofilter(0, 0, len(chunk), len(chunk.columns) - 1)
 
             print(f"File {i + 1} of {len(df_chunks)} for {collection_name} saved: {excel_file_path}")
+            total_excel_files += 1
         except Exception as e:
             print(f"Failed to save file {sanitized_collection_name}.xlsx due to {e}")
 
@@ -162,6 +163,45 @@ with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
 
 print(f"Excel files have been zipped into {zip_file_path}")
 
+# Check the size of the zip file
+zip_file_size = os.path.getsize(zip_file_path) / (1024 * 1024)  # Size in MB
+print(f"Size of '{zip_file_path}': {zip_file_size:.2f} MB")
+
+# Split the zip file if its size exceeds 15 MB
+if zip_file_size > 15:
+    # Function to split zip files into smaller parts
+    def split_zip_file(zip_file_path, max_size_mb=15):
+        with zipfile.ZipFile(zip_file_path, 'r') as original_zip:
+            file_infos = original_zip.infolist()
+            current_size = 0
+            part_number = 1
+            current_zip = None
+
+            for file_info in file_infos:
+                if current_zip is None or current_size + file_info.file_size > max_size_mb * 1024 * 1024:
+                    if current_zip:
+                        current_zip.close()
+                    part_zip_name = f"{os.path.splitext(os.path.basename(zip_file_path))[0]}_part{part_number}.zip"
+                    part_zip_path = os.path.join(os.path.dirname(zip_file_path), part_zip_name)
+                    current_zip = zipfile.ZipFile(part_zip_path, 'w', zipfile.ZIP_DEFLATED)
+                    part_number += 1
+                    current_size = 0
+
+                current_zip.writestr(file_info, original_zip.read(file_info.filename))
+                current_size += file_info.file_size
+
+            if current_zip:
+                current_zip.close()
+
+    split_zip_file(zip_file_path)
+
+    # Remove the original large zip file
+    os.remove(zip_file_path)
+    print(f"Original zip file '{zip_file_path}' has been deleted after splitting.")
+
+# Print total number of Excel files created
+print(f"Total {total_excel_files} Excel files created.")
+
 # Connect to the target MongoDB database for storing the zip file
 zip_db = client['zip_files']
 zip_collection = zip_db['excel_files']
@@ -172,19 +212,21 @@ if zip_collection.count_documents({}) > 0:
     zip_collection.delete_many({})
     print("All documents in 'excel_files' collection have been deleted.")
 
-# Read the zip file and insert it into MongoDB using GridFS
-fs = GridFS(zip_db)
-with open(zip_file_path, 'rb') as file_data:
-    file_id = fs.put(file_data, filename="excel_files.zip")
+# Read the split zip files and insert them into MongoDB
+for root, dirs, files in os.walk('excel_files'):
+    for file in files:
+        file_path = os.path.join(root, file)
+        if file.endswith('.zip'):
+            with open(file_path, 'rb') as file_data:
+                zip_binary = file_data.read()
+                zip_document = {
+                    "filename": file,
+                    "filedata": zip_binary
+                }
+                zip_collection.insert_one(zip_document)
+                print(f"Zip file '{file}' has been saved to MongoDB.")
 
-print("Zip file has been saved to MongoDB successfully.")
-
-# Delete the zip file from local storage
-try:
-    os.remove(zip_file_path)
-    print(f"Zip file '{zip_file_path}' has been deleted from local storage.")
-except OSError as e:
-    print(f"Error: {zip_file_path} : {e.strerror}")
+print("All split zip files have been saved to MongoDB successfully.")
 
 # Close the MongoDB connection
 client.close()
