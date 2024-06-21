@@ -135,29 +135,35 @@ with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
 
 print(f"Excel files have been zipped into {zip_file_path}")
 
-# Connect to the MongoDB database for storing the zip file
-zip_db_name = "zip_files"
-zip_collection_name = "excel_files"
-zip_db = client[zip_db_name]
-fs = GridFS(zip_db, zip_collection_name)
 
-# Check if the GridFS collection is empty and remove existing files if not
-if fs.exists({}):
-    print("Existing files found in the collection. Removing them.")
-    fs_files = zip_db['fs.files']
-    fs_chunks = zip_db['fs.chunks']
-    fs_files.delete_many({})
-    fs_chunks.delete_many({})
-    print("All existing files in the collection have been removed.")
 
-# Store the zip file in GridFS
-with open(zip_file_path, 'rb') as f:
-    grid_out = fs.put(f, filename='excel_files.zip')
+# Connect to the target MongoDB database for storing the zip file
+zip_db = client['zip_files']
+zip_collection = zip_db['excel_files']
 
-# Print the size of the zip file
-file_info = fs.find_one({"_id": grid_out})
-file_size = file_info.length
-print(f"Zip file {zip_file_path} has been saved to MongoDB in database {zip_db_name}, collection {zip_collection_name}, with size: {file_size / 1048576:.2f} MB.")
+# Check if the collection is not empty and delete its contents if it is not empty
+if zip_collection.count_documents({}) > 0:
+    print("Collection 'excel_files' is not empty. Deleting all documents.")
+    zip_collection.delete_many({})
+    print("All documents in 'excel_files' collection have been deleted.")
+
+# Read the zip file and insert it into MongoDB
+with open(zip_file_path, 'rb') as file_data:
+    zip_binary = file_data.read()
+    zip_document = {
+        "filename": "excel_files.zip",
+        "filedata": zip_binary
+    }
+    zip_collection.insert_one(zip_document)
+
+print("Zip file has been saved to MongoDB successfully.")
+
+# Delete the zip file from local storage
+try:
+    os.remove(zip_file_path)
+    print(f"Zip file '{zip_file_path}' has been deleted from local storage.")
+except OSError as e:
+    print(f"Error: {zip_file_path} : {e.strerror}")
 
 # Close the MongoDB connection
 client.close()
