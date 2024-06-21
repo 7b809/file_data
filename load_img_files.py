@@ -147,8 +147,8 @@ for idx, collection_name in enumerate(collection_names, 1):
         axs[1].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
         # Enabling both grid lines:
         axs[0].grid(which = "both")
-        ax[0].minorticks_on()
-        ax[0].tick_params(which = "minor", bottom = False, left = False)
+        axs[0].minorticks_on()
+        axs[0].tick_params(which = "minor", bottom = False, left = False)
 
         plt.subplots_adjust(hspace=0.6)
         plt.tight_layout()
