@@ -7,16 +7,18 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import zipfile
+from scipy.stats import zscore
+from PIL import Image
 import io
-from gridfs import GridFS
 
+# MongoDB connection details
 # Get the MongoDB URL from the environment variable
 target_mongo_url =os.getenv("target_mongo_url")
 if not target_mongo_url:
     print("MongoDB URL not found in environment variables.")
     exit(1)
 
-# Database name
+
 target_db_name = "channel_related_json"
 
 # Connect to the MongoDB client
@@ -33,6 +35,26 @@ if not os.path.exists(output_folder):
 collection_names = db.list_collection_names()
 total_collections = len(collection_names)
 print(f"Total collections found: {total_collections}")
+
+def remove_outliers_zscore(data):
+    z_scores = zscore(data)
+    abs_z_scores = abs(z_scores)
+    filtered_entries = (abs_z_scores < 5)  # Threshold for Z-score
+    return filtered_entries
+
+def compress_image(image_path, output_path, max_size_kb=50):
+    quality = 95
+    while quality > 0:
+        img = Image.open(image_path)
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG', quality=quality)
+        size_kb = len(img_byte_arr.getvalue()) / 1024
+        if size_kb <= max_size_kb:
+            with open(output_path, 'wb') as f:
+                f.write(img_byte_arr.getvalue())
+            return
+        quality -= 5
+    img.save(output_path, format='PNG', quality=quality)
 
 for idx, collection_name in enumerate(collection_names, 1):
     try:
@@ -54,15 +76,20 @@ for idx, collection_name in enumerate(collection_names, 1):
             except Exception as e:
                 print(f"Error processing document {doc}: {e}")
 
-        ymin_profits_per_day = min(profits_per_day, default=0)
-        ymax_profits_per_day = max(profits_per_day, default=0)
-        ymin_total_profits = min(total_profits, default=0)
-        ymax_total_profits = max(total_profits, default=0)
+        # Remove outliers
+        profits_per_day_filtered = [p for p, valid in zip(profits_per_day, remove_outliers_zscore(profits_per_day)) if valid]
+        total_profits_filtered = [p for p, valid in zip(total_profits, remove_outliers_zscore(total_profits)) if valid]
+        timestamps_filtered = [t for t, valid in zip(timestamps, remove_outliers_zscore(profits_per_day)) if valid]
+
+        ymin_profits_per_day = min(profits_per_day_filtered, default=0)
+        ymax_profits_per_day = max(profits_per_day_filtered, default=0)
+        ymin_total_profits = min(total_profits_filtered, default=0)
+        ymax_total_profits = max(total_profits_filtered, default=0)
 
         data = {
-            'timestamp': timestamps,
-            'profit': profits_per_day,
-            'full_profit': total_profits
+            'timestamp': timestamps_filtered,
+            'profit': profits_per_day_filtered,
+            'full_profit': total_profits_filtered
         }
         df = pd.DataFrame(data)
 
@@ -107,7 +134,7 @@ for idx, collection_name in enumerate(collection_names, 1):
 
         for ax in axs:
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-            plt.setp(ax.get_xticklabels(), rotation=45)
+            plt.setp(ax.get_xticklabels(), rotation=60)
 
         handles = [
             plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10, label='00:00 - 05:59'),
@@ -118,14 +145,27 @@ for idx, collection_name in enumerate(collection_names, 1):
 
         axs[0].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
         axs[1].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
+        # Enabling both grid lines:
+        axs[0].grid(which = "both")
+        ax[0].minorticks_on()
+        ax[0].tick_params(which = "minor", bottom = False, left = False)
 
         plt.subplots_adjust(hspace=0.6)
         plt.tight_layout()
 
         sanitized_collection_name = re.sub(r'\W+', '_', collection_name)
         output_file = os.path.join(output_folder, f"{sanitized_collection_name}.png")
-        plt.savefig(output_file)
+        temp_output_file = os.path.join(output_folder, f"temp_{sanitized_collection_name}.png")
+        
+        # Save the plot to a temporary file first
+        plt.savefig(temp_output_file)
         plt.close()
+
+        # Compress the image
+        compress_image(temp_output_file, output_file)
+
+        # Remove the temporary file
+        os.remove(temp_output_file)
 
         end_time = time.time()
         execution_time = end_time - start_time
@@ -134,71 +174,45 @@ for idx, collection_name in enumerate(collection_names, 1):
     except Exception as e:
         print(f"Error processing collection {collection_name}: {e}")
 
+# Zip the image files
+zip_file_path = 'img_files.zip'
+with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    for root, dirs, files in os.walk(output_folder):
+        for file in files:
+            file_path = os.path.join(root, file)
+            arcname = os.path.relpath(file_path, output_folder)
+            zipf.write(file_path, arcname)
 
-# Database name and collection name for storing the zip file
-zip_db_name = "zip_files"
-zip_collection_name = "img_files"
+print(f"Directory '{output_folder}' has been zipped into '{zip_file_path}'.")
 
-# Get remaining space in MongoDB database
-def get_remaining_space(client):
-    try:
-        db_stats = client.admin.command('dbStats')
-        storage_size_mb = db_stats['storageSize'] / (1024 * 1024)  # Convert bytes to megabytes
-        data_size_mb = db_stats['dataSize'] / (1024 * 1024)  # Convert bytes to megabytes
-        remaining_space_mb = storage_size_mb - data_size_mb
-        print(f"Remaining space in MongoDB database: {remaining_space_mb:.2f} MB")
-    except Exception as e:
-        print(f"Error getting remaining space in MongoDB database: {e}")
 
-# Get size of zip file
-def get_zip_file_size(zip_file_path):
-    try:
-        zip_file_size = os.path.getsize(zip_file_path) / (1024 * 1024)  # Convert bytes to megabytes
-        print(f"Size of zip file: {zip_file_size:.2f} MB")
-    except Exception as e:
-        print(f"Error getting size of zip file: {e}")
+# Connect to the target MongoDB database for storing the zip file
+zip_db = client['zip_files']
+zip_collection = zip_db['img_files']
 
-# Connect to the MongoDB database for storing the zip file
-zip_db = client[zip_db_name]
-fs = GridFS(zip_db, zip_collection_name)
+# Check if the collection is not empty and delete its contents if it is not empty
+if zip_collection.count_documents({}) > 0:
+    print("Collection 'img_files' is not empty. Deleting all documents.")
+    zip_collection.delete_many({})
+    print("All documents in 'img_files' collection have been deleted.")
 
-# Check if the GridFS collection is empty and remove existing files if not
-if fs.exists({}):
-    print("Existing files found in the collection. Removing them.")
-    fs_files = zip_db['fs.files']
-    fs_chunks = zip_db['fs.chunks']
-    fs_files.delete_many({})
-    fs_chunks.delete_many({})
-    print("All existing files in the collection have been removed.")
+# Read the zip file and insert it into MongoDB
+with open(zip_file_path, 'rb') as file_data:
+    zip_binary = file_data.read()
+    zip_document = {
+        "filename": "img_files.zip",
+        "filedata": zip_binary
+    }
+    zip_collection.insert_one(zip_document)
 
-# After processing all images, create a zip file and store it in MongoDB
+print("Zip file has been saved to MongoDB successfully.")
+
+# Delete the zip file from local storage
 try:
-    zip_file_path = 'img_files.zip'
-    with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(output_folder):
-            for file in files:
-                zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), output_folder))
+    os.remove(zip_file_path)
+    print(f"Zip file '{zip_file_path}' has been deleted from local storage.")
+except OSError as e:
+    print(f"Error: {zip_file_path} : {e.strerror}")
 
-    # Save zip file to MongoDB GridFS
-    with open(zip_file_path, 'rb') as f:
-        grid_out = fs.put(f, filename='img_files.zip')
-
-    # Print the size of the zip file
-    file_info = fs.find_one({"_id": grid_out})
-    file_size = file_info.length
-    print(f"Zip file {zip_file_path} has been saved to MongoDB in database {zip_db_name}, collection {zip_collection_name}, with size: {file_size / 1048576:.2f} MB.")
-
-    # Print remaining space in MongoDB database
-    get_remaining_space(client)
-
-except Exception as e:
-    print(f"Error saving zip file to MongoDB: {e}")
-finally:
-    # Clean up temporary directory
-    if os.path.exists(output_folder):
-        for file in os.listdir(output_folder):
-            os.remove(os.path.join(output_folder, file))
-        os.rmdir(output_folder)
-
-    # Close the MongoDB connection
-    client.close()
+# Close the MongoDB connection
+client.close()
