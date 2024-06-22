@@ -13,11 +13,10 @@ import io
 
 # MongoDB connection details
 # Get the MongoDB URL from the environment variable
-target_mongo_url =os.getenv("target_mongo_url")
+target_mongo_url = os.getenv("target_mongo_url")
 if not target_mongo_url:
     print("MongoDB URL not found in environment variables.")
     exit(1)
-
 
 target_db_name = "channel_related_json"
 
@@ -26,22 +25,19 @@ client = pymongo.MongoClient(target_mongo_url)
 db = client[target_db_name]
 print(f"Connected to MongoDB database '{target_db_name}'.")
 
-# Output folder for saving images
-output_folder = r"temp_img_files"
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
-
 # Get a list of collection names
 collection_names = db.list_collection_names()
 total_collections = len(collection_names)
 print(f"Total collections found: {total_collections}")
 
+# Function to remove outliers using Z-score
 def remove_outliers_zscore(data):
     z_scores = zscore(data)
     abs_z_scores = abs(z_scores)
     filtered_entries = (abs_z_scores < 5)  # Threshold for Z-score
     return filtered_entries
 
+# Function to compress images
 def compress_image(image_path, output_path, max_size_kb=50):
     quality = 95
     while quality > 0:
@@ -56,137 +52,139 @@ def compress_image(image_path, output_path, max_size_kb=50):
         quality -= 5
     img.save(output_path, format='PNG', quality=quality)
 
-for idx, collection_name in enumerate(collection_names, 1):
-    try:
-        start_time = time.time()
-        print(f"\nProcessing collection {idx} out of {total_collections}: {collection_name}")
+# Split collections into multiple folders
+collections_per_folder = 70
+total_folders = (total_collections // collections_per_folder) + (1 if total_collections % collections_per_folder else 0)
 
-        collection = db[collection_name]
-        documents = list(collection.find())
+# Process each collection and save images to respective folders
+for folder_idx in range(total_folders):
+    folder_name = f"folder_{folder_idx + 1}"
+    output_folder = os.path.join("temp_img_files", folder_name)
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+    
+    start_idx = folder_idx * collections_per_folder
+    end_idx = min(start_idx + collections_per_folder, total_collections)
+    
+    for idx, collection_name in enumerate(collection_names[start_idx:end_idx], 1):
+        try:
+            start_time = time.time()
+            print(f"\nProcessing collection {idx + start_idx} out of {total_collections}: {collection_name}")
 
-        timestamps = []
-        profits_per_day = []
-        total_profits = []
+            collection = db[collection_name]
+            documents = list(collection.find())
 
-        for doc in documents:
-            try:
-                timestamps.append(datetime.strptime(doc["Timestamp"], "%A, %b %d, %Y, %I %p"))
-                profits_per_day.append(doc["Profits Per Day ($)"])
-                total_profits.append(doc["Profits Without Expenses ($)"])
-            except Exception as e:
-                print(f"Error processing document {doc}: {e}")
+            timestamps = []
+            profits_per_day = []
+            total_profits = []
 
-        # Remove outliers
-        profits_per_day_filtered = [p for p, valid in zip(profits_per_day, remove_outliers_zscore(profits_per_day)) if valid]
-        total_profits_filtered = [p for p, valid in zip(total_profits, remove_outliers_zscore(total_profits)) if valid]
-        timestamps_filtered = [t for t, valid in zip(timestamps, remove_outliers_zscore(profits_per_day)) if valid]
+            for doc in documents:
+                try:
+                    timestamps.append(datetime.strptime(doc["Timestamp"], "%A, %b %d, %Y, %I %p"))
+                    profits_per_day.append(doc["Profits Per Day ($)"])
+                    total_profits.append(doc["Profits Without Expenses ($)"])
+                except Exception as e:
+                    print(f"Error processing document {doc}: {e}")
 
-        ymin_profits_per_day = min(profits_per_day_filtered, default=0)
-        ymax_profits_per_day = max(profits_per_day_filtered, default=0)
-        ymin_total_profits = min(total_profits_filtered, default=0)
-        ymax_total_profits = max(total_profits_filtered, default=0)
+            # Remove outliers
+            profits_per_day_filtered = [p for p, valid in zip(profits_per_day, remove_outliers_zscore(profits_per_day)) if valid]
+            total_profits_filtered = [p for p, valid in zip(total_profits, remove_outliers_zscore(total_profits)) if valid]
+            timestamps_filtered = [t for t, valid in zip(timestamps, remove_outliers_zscore(profits_per_day)) if valid]
 
-        data = {
-            'timestamp': timestamps_filtered,
-            'profit': profits_per_day_filtered,
-            'full_profit': total_profits_filtered
-        }
-        df = pd.DataFrame(data)
+            ymin_profits_per_day = min(profits_per_day_filtered, default=0)
+            ymax_profits_per_day = max(profits_per_day_filtered, default=0)
+            ymin_total_profits = min(total_profits_filtered, default=0)
+            ymax_total_profits = max(total_profits_filtered, default=0)
 
-        def categorize_hour(hour):
-            if hour >= 0 and hour < 6:
-                return '00:00 - 05:59'
-            elif hour >= 6 and hour < 12:
-                return '06:00 - 11:59'
-            elif hour >= 12 and hour < 18:
-                return '12:00 - 17:59'
-            else:
-                return '18:00 - 23:59'
+            data = {
+                'timestamp': timestamps_filtered,
+                'profit': profits_per_day_filtered,
+                'full_profit': total_profits_filtered
+            }
+            df = pd.DataFrame(data)
 
-        def get_color(hour):
-            category = categorize_hour(hour)
-            if category == '00:00 - 05:59':
-                return 'blue'
-            elif category == '06:00 - 11:59':
-                return 'green'
-            elif category == '12:00 - 17:59':
-                return 'orange'
-            else:
-                return 'red'
+            def categorize_hour(hour):
+                if hour >= 0 and hour < 6:
+                    return '00:00 - 05:59'
+                elif hour >= 6 and hour < 12:
+                    return '06:00 - 11:59'
+                elif hour >= 12 and hour < 18:
+                    return '12:00 - 17:59'
+                else:
+                    return '18:00 - 23:59'
 
-        fig, axs = plt.subplots(2, 1, figsize=(24, 20))
+            def get_color(hour):
+                category = categorize_hour(hour)
+                if category == '00:00 - 05:59':
+                    return 'blue'
+                elif category == '06:00 - 11:59':
+                    return 'green'
+                elif category == '12:00 - 17:59':
+                    return 'orange'
+                else:
+                    return 'red'
 
-        for idx, row in df.iterrows():
-            hour = row['timestamp'].hour
-            color = get_color(hour)
-            axs[0].scatter(row['timestamp'], row['profit'], color=color)
-            axs[1].scatter(row['timestamp'], row['full_profit'], color=color)
+            fig, axs = plt.subplots(2, 1, figsize=(24, 20))
 
-        axs[0].set_xlabel('Timestamp')
-        axs[0].set_ylabel('Profits Per Day ($)')
-        axs[0].set_ylim(ymin_profits_per_day - 5, ymax_profits_per_day + 10)
-        axs[0].set_title(f'{collection_name} - Profits Per Day Electricity Included \n\n Low Value during period {ymin_profits_per_day} \n Highest Value during period {ymax_profits_per_day}')
+            for idx, row in df.iterrows():
+                hour = row['timestamp'].hour
+                color = get_color(hour)
+                axs[0].scatter(row['timestamp'], row['profit'], color=color)
+                axs[1].scatter(row['timestamp'], row['full_profit'], color=color)
 
-        axs[1].set_xlabel('Timestamp')
-        axs[1].set_ylabel('Profits Without Expenses ($)')
-        axs[1].set_ylim(ymin_total_profits - 5, ymax_total_profits + 10)
-        axs[1].set_title(f'{collection_name} - Total Profits Without Expenses \n\n Lowest Value during period {ymin_total_profits} \n Highest Value during period {ymax_total_profits}')
+            axs[0].set_xlabel('Timestamp')
+            axs[0].set_ylabel('Profits Per Day ($)')
+            axs[0].set_ylim(ymin_profits_per_day - 5, ymax_profits_per_day + 10)
+            axs[0].set_title(f'{collection_name} - Profits Per Day Electricity Included \n\n Low Value during period {ymin_profits_per_day} \n Highest Value during period {ymax_profits_per_day}')
 
-        for ax in axs:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-            plt.setp(ax.get_xticklabels(), rotation=60)
+            axs[1].set_xlabel('Timestamp')
+            axs[1].set_ylabel('Profits Without Expenses ($)')
+            axs[1].set_ylim(ymin_total_profits - 5, ymax_total_profits + 10)
+            axs[1].set_title(f'{collection_name} - Total Profits Without Expenses \n\n Lowest Value during period {ymin_total_profits} \n Highest Value during period {ymax_total_profits}')
 
-        handles = [
-            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10, label='00:00 - 05:59'),
-            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, label='06:00 - 11:59'),
-            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='12:00 - 17:59'),
-            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='18:00 - 23:59')
-        ]
+            for ax in axs:
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+                plt.setp(ax.get_xticklabels(), rotation=60)
 
-        axs[0].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
-        axs[1].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
-        # Enabling both grid lines:
-        axs[0].grid(which = "both")
-        axs[0].minorticks_on()
-        axs[0].tick_params(which = "minor", bottom = False, left = False)
+            handles = [
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10, label='00:00 - 05:59'),
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, label='06:00 - 11:59'),
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='12:00 - 17:59'),
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='18:00 - 23:59')
+            ]
 
-        plt.subplots_adjust(hspace=0.6)
-        plt.tight_layout()
+            axs[0].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
+            axs[1].legend(handles=handles, title='Hour Category', bbox_to_anchor=(1, 1), loc='upper left')
+            # Enabling both grid lines:
+            axs[0].grid(which = "both")
+            axs[0].minorticks_on()
+            axs[0].tick_params(which = "minor", bottom = False, left = False)
 
-        sanitized_collection_name = re.sub(r'\W+', '_', collection_name)
-        output_file = os.path.join(output_folder, f"{sanitized_collection_name}.png")
-        temp_output_file = os.path.join(output_folder, f"temp_{sanitized_collection_name}.png")
-        
-        # Save the plot to a temporary file first
-        plt.savefig(temp_output_file)
-        plt.close()
+            plt.subplots_adjust(hspace=0.6)
+            plt.tight_layout()
 
-        # Compress the image
-        compress_image(temp_output_file, output_file)
+            sanitized_collection_name = re.sub(r'\W+', '_', collection_name)
+            output_file = os.path.join(output_folder, f"{sanitized_collection_name}.png")
+            temp_output_file = os.path.join(output_folder, f"temp_{sanitized_collection_name}.png")
+            
+            # Save the plot to a temporary file first
+            plt.savefig(temp_output_file)
+            plt.close()
 
-        # Remove the temporary file
-        os.remove(temp_output_file)
+            # Compress the image
+            compress_image(temp_output_file, output_file)
 
-        end_time = time.time()
-        execution_time = end_time - start_time
-        print(f"Total execution time for {collection_name}: {execution_time:.2f} seconds\n\n")
+            # Remove the temporary file
+            os.remove(temp_output_file)
 
-    except Exception as e:
-        print(f"Error processing collection {collection_name}: {e}")
+            end_time = time.time()
+            execution_time = end_time - start_time
+            print(f"Total execution time for {collection_name}: {execution_time:.2f} seconds\n\n")
 
-# Zip the image files
-zip_file_path = 'img_files.zip'
-with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-    for root, dirs, files in os.walk(output_folder):
-        for file in files:
-            file_path = os.path.join(root, file)
-            arcname = os.path.relpath(file_path, output_folder)
-            zipf.write(file_path, arcname)
+        except Exception as e:
+            print(f"Error processing collection {collection_name}: {e}")
 
-print(f"Directory '{output_folder}' has been zipped into '{zip_file_path}'.")
-
-
-# Connect to the target MongoDB database for storing the zip file
+# Zip each folder and save to MongoDB
 zip_db = client['zip_files']
 zip_collection = zip_db['img_files']
 
@@ -196,23 +194,38 @@ if zip_collection.count_documents({}) > 0:
     zip_collection.delete_many({})
     print("All documents in 'img_files' collection have been deleted.")
 
-# Read the zip file and insert it into MongoDB
-with open(zip_file_path, 'rb') as file_data:
-    zip_binary = file_data.read()
-    zip_document = {
-        "filename": "img_files.zip",
-        "filedata": zip_binary
-    }
-    zip_collection.insert_one(zip_document)
+for folder_idx in range(total_folders):
+    folder_name = f"folder_{folder_idx + 1}"
+    output_folder = os.path.join("temp_img_files", folder_name)
+    zip_file_path = f"{folder_name}.zip"
+    
+    # Zip the folder
+    with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(output_folder):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, output_folder)
+                zipf.write(file_path, arcname)
 
-print("Zip file has been saved to MongoDB successfully.")
+    print(f"Directory '{output_folder}' has been zipped into '{zip_file_path}'.")
 
-# Delete the zip file from local storage
-try:
-    os.remove(zip_file_path)
-    print(f"Zip file '{zip_file_path}' has been deleted from local storage.")
-except OSError as e:
-    print(f"Error: {zip_file_path} : {e.strerror}")
+    # Read the zip file and insert it into MongoDB
+    with open(zip_file_path, 'rb') as file_data:
+        zip_binary = file_data.read()
+        zip_document = {
+            "filename": zip_file_path,
+            "filedata": zip_binary
+        }
+        zip_collection.insert_one(zip_document)
+
+    print(f"Zip file '{zip_file_path}' has been saved to MongoDB successfully.")
+
+    # Delete the zip file from local storage
+    try:
+        os.remove(zip_file_path)
+        print(f"Zip file '{zip_file_path}' has been deleted from local storage.")
+    except OSError as e:
+        print(f"Error: {zip_file_path} : {e.strerror}")
 
 # Close the MongoDB connection
 client.close()
