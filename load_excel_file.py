@@ -31,6 +31,16 @@ target_db_name = "channel_related_json"
 client = pymongo.MongoClient(target_mongo_url)
 db = client[target_db_name]
 
+    # Connect to the target MongoDB database for storing the zip file
+zip_db = client['zip_files']
+zip_collection = zip_db['excel_files']
+    # Check if the collection is not empty and delete its contents if it is not empty
+if zip_collection.count_documents({}) > 0:
+    
+    print("Collection 'excel_files' is not empty. Deleting all documents.")
+    zip_collection.delete_many({})
+    print("All documents in 'excel_files' collection have been deleted.")
+
 # Ensure the base directory exists
 base_directory = 'excel_folders'
 if os.path.exists(base_directory):
@@ -161,14 +171,7 @@ for folder_index in range(num_folders):
     # Zip the folder
     zip_file_path = zip_directory(folder_path)
 
-    # Connect to the target MongoDB database for storing the zip file
-    zip_db = client['zip_files']
-    zip_collection = zip_db['excel_files']
-    # Check if the collection is not empty and delete its contents if it is not empty
-    if zip_collection.count_documents({}) > 0:
-        print("Collection 'excel_files' is not empty. Deleting all documents.")
-        zip_collection.delete_many({})
-        print("All documents in 'excel_files' collection have been deleted.")
+
 
 
     # Read the zip file and insert it into MongoDB
